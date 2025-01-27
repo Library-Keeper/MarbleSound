@@ -5,7 +5,8 @@ from hashing import Hasher
 from uuid import uuid4
 import models
 from enum import Enum
-
+from fastapi import UploadFile
+from fastapi.responses import FileResponse
 class SearchBy(str, Enum):
     id = "ID"
     username = "Username"
@@ -32,28 +33,26 @@ def create_user(username: str, password: str, db: Session):
     )
     db.add(db_user_password)
     db.commit()
-    return {"id": str(db_user.id), "session": str(session)}
+    return {"id": db_user.id, "session": str(session)}
 
-def get_user(db: Session, search_by: SearchBy, username: str = None, id: int = None):
+def get_user(db: Session, search_by: SearchBy = SearchBy.id, username: str = None, id: int = None):
     if search_by == SearchBy.id and id is not None:
-        user = db.query(models.User).filter(models.User.id == id).first()
+        return db.query(models.User).filter(models.User.id == id).first()
     elif search_by == SearchBy.username and username is not None:
-        user = db.query(models.User).filter(models.User.username == username).first()
+        return db.query(models.User).filter(models.User.username == username).first()
     else:
-        user = Error.SearchBy
-    return user
+        return Error.SearchBy
 
 def get_users(db: Session, username: str):
     return db.query(models.User).filter(models.User.username.regexp_match(f"(?i).*{username}.*", flags='i')).limit(30).all()
 
 def check_user_session(db: Session, id:int, session: str):
-    user_data = db.query(models.UserHashedData).filter(models.UserHashedData.user_id == id).first()
+    user_data = get_user_hash(db, session, get_user(db, SearchBy.id, id=id))
     return Hasher.verify_hash(session, user_data.hashed_session) if user_data.hashed_session is not None else False
 
 def user_logout(db: Session, id:str, session:str):
-    user_data = db.query(models.UserHashedData).filter(models.UserHashedData.user_id == id).first()
-    if not user_data or not Hasher.verify_hash(session, user_data.hashed_session):
-        return Error.WrongData
+    user_data = get_user_hash(db, session, get_user(db, id=id))
+    
     user_data.hashed_session = None
     db.commit()
     db.refresh(user_data)
@@ -73,15 +72,16 @@ def user_login(db: Session, username:str, password: str):
     db.refresh(user_data)
     return {"session": session}
 
-def update_user_data(db: Session, id: int, session: str, username: str = None, description: str = None):
-    user = get_user(db, SearchBy.id, id=id)
-    if not user:
-        return Error.NotExist
+def get_user_hash(db: Session, session: str, user: models.User):
     user_data = db.query(models.UserHashedData).filter(models.UserHashedData.user_id == user.id).first()
     if not Hasher.verify_hash(session, user_data.hashed_session):
         return Error.WrongData
-    if get_user(db, SearchBy.username, username):
-        return Error.WrongData
+    return user_data
+
+def update_user_data(db: Session, id: int, username: str = None, description: str = None):
+    user = get_user(db, id=id)
+    if not user:
+        return Error.NotExist
     if username is not None:
         user.username = username
     if description is not None:
@@ -89,5 +89,38 @@ def update_user_data(db: Session, id: int, session: str, username: str = None, d
     
     db.commit()
     db.refresh(user)
-    return db.query(models.User).filter(models.User.id == id).first()
+    return get_user(db, SearchBy.id, id=id)
+
+def save_file(path: str, file: UploadFile):
+    path = path.strip("./").split("/")
+    print(path)
+    filepath = f"./uploads/temp/{uuid4()}+{uuid4()}"
+    match path[1]:
+        case "audio":
+            match path[2]:
+                case "file":
+                    filepath = f"./uploads/audio/file/{uuid4()}+{file.filename}"
+                case "cover":
+                    filepath = f"./uploads/audio/cover/{uuid4()}+{file.filename}"
+        case "avatar":
+            filepath = f"./uploads/avatar/{uuid4()}+{file.filename}"
+        case "playlist":
+            filepath = f"./uploads/playlist/cover/{uuid4()}+{file.filename}"
+
+    with open(filepath, "wb") as f:
+        f.write(file.file.read())
+    return filepath
+
+def get_file(filepath: str) -> FileResponse:
+    return FileResponse(path = filepath, filename=filepath.split("/")[-1],media_type='multipart/form-data')
+
+def update_user_avatar(db: Session, id: int, avatar: UploadFile):
+    user = get_user(db, id=id)
+    user.avatar = save_file("./uploads/avatar", avatar)
+    db.commit()
+    db.refresh(user)
+    return get_user(db, id=id)
+
+def get_user_avatar(db: Session, id: int) -> FileResponse:
+    return get_file(get_user(db, id=id).avatar)
 

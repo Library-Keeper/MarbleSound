@@ -1,14 +1,13 @@
-from sqlalchemy import Boolean, Column, Integer, String, Time, DateTime, LargeBinary, Text, ForeignKey
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, LargeBinary
 from sqlalchemy.orm import relationship
 from database import Base
-
 
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, autoincrement=True, primary_key=True, index=True)
     username = Column(String(255), unique=True, index=True, nullable=False)
-    avatar = Column(LargeBinary)
+    avatar = Column(String(2048))
     description = Column(Text)
     date_of_reg = Column(DateTime, nullable=False)
 
@@ -28,8 +27,8 @@ class Audio(Base):
 
     id = Column(Integer, autoincrement=True, primary_key=True, index=True)
     filename = Column(Text, nullable=False)
-    file = Column(LargeBinary, nullable=False)
-    cover = Column(LargeBinary)
+    file = Column(String(2048), nullable=False)
+    cover = Column(String(2048))
     key = Column(String(255), default="No key")
     instrument = Column(String(255), nullable=False)
     bpm = Column(Integer)
@@ -43,6 +42,6 @@ class Playlist(Base):
 
     id = Column(Integer, autoincrement=True, primary_key=True, index=True)
     name = Column(Text, nullable=False)
-    cover = Column(LargeBinary)
+    cover = Column(String(2048))
     audio = relationship("Audio", backref="playlists")
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)

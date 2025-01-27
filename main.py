@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile
 from typing import Annotated
 import models
 from database import engine, SessionLocal
@@ -26,20 +26,22 @@ def create_user(db: db, username: str, password: str):
 
 @app.post("/user/logout", status_code=status.HTTP_200_OK)
 def user_logout(db: db, id: str, session: str):
+    if not crud.check_user_session(db, id, session):
+        return crud.Error.WrongData
     return crud.user_logout(db=db, id=id, session=session)
 
-@app.post("/user/login", status_code=status.HTTP_202_ACCEPTED)
+@app.post("/user/login", status_code=status.HTTP_201_CREATED)
 def user_login(db: db, username: str, password: str):
     return crud.user_login(db=db, username=username, password=password)
 
-@app.get("/user/", status_code=status.HTTP_202_ACCEPTED)
+@app.get("/user/", status_code=status.HTTP_200_OK)
 def get_user(db: db, search_by: crud.SearchBy, username: str = None, id: int = None):
     """
     Get one user by id or username
     """
     return crud.get_user(db=db, search_by=search_by, username=username, id=id)
 
-@app.get("/users/", status_code=status.HTTP_202_ACCEPTED)
+@app.get("/users/", status_code=status.HTTP_200_OK)
 def get_users(db: db, username: str = None):
     """
     Get multiple users with similar username
@@ -48,4 +50,16 @@ def get_users(db: db, username: str = None):
 
 @app.put("/user/update/", status_code=status.HTTP_202_ACCEPTED)
 def update_user_data(db: db, id: int, session: str, username: str = None, description: str = None):
-    return crud.update_user_data(db, id, session, username, description)
+    if not crud.check_user_session(db, id, session):
+        return crud.Error.WrongData
+    return crud.update_user_data(db, id, username, description)
+
+@app.put("/user/update/avatar", status_code=status.HTTP_202_ACCEPTED)
+def update_user_avatar(db: db, id: int, session: str, avatar: UploadFile):
+    if not crud.check_user_session(db, id, session):
+        return crud.Error.WrongData
+    return crud.update_user_avatar(db, id, avatar)
+
+@app.get("/user/avatar", status_code=status.HTTP_200_OK)
+def get_user_avatar(db: db, id: int):
+    return crud.get_user_avatar(db, id)
