@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, LargeBinary
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, JSON 
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -26,15 +26,15 @@ class Audio(Base):
     __tablename__ = "audios"
 
     id = Column(Integer, autoincrement=True, primary_key=True, index=True)
-    filename = Column(Text, nullable=False)
-    file = Column(String(2048), nullable=False)
-    cover = Column(String(2048))
+    title = Column(Text, nullable=False)
+    cover = Column(Text, nullable=True)
+    file = Column(Text, nullable=False)
     key = Column(String(255), default="No key")
     instrument = Column(String(255), nullable=False)
     bpm = Column(Integer)
     genre = Column(String(255))
-    is_loop = Column(Boolean, nullable=False)
-    playlist_id = Column(Integer, ForeignKey("playlists.id"))
+    is_loop = Column(Boolean, nullable=False, default=False)
+    playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=True)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
 class Playlist(Base):
@@ -43,5 +43,5 @@ class Playlist(Base):
     id = Column(Integer, autoincrement=True, primary_key=True, index=True)
     name = Column(Text, nullable=False)
     cover = Column(String(2048))
-    audio = relationship("Audio", backref="playlists")
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    audio = relationship("Audio", backref="playlists")
