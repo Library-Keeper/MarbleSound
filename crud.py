@@ -11,11 +11,6 @@ from typing import List
 class SearchBy(str, Enum):
     id = "ID"
     username = "Username"
-    title = "Title"
-    bpm = "Bits per minute"
-    genre = "Genre"
-    instrument = "Instrument"
-    loop = "Is Loop"
 
 def create_user(username: str, password: str, db: Session):
     db_user = models.User(

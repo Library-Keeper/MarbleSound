@@ -11,3 +11,4 @@ class Hasher():
     @staticmethod
     def get_hash(data):
         return pwd_context.hash(data)
+    

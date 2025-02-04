@@ -76,6 +76,5 @@ def get_audio(db: db, id: int = None):
     return crud.get_audio(db, id)
 
 @app.post("/audios/", status_code=200)
-def search_audio(db: db, title: str = None, bpm: int = None, 
-                 genre: List[str] = None, instrument: str = None, loop: bool = None):
+def search_audio(db: db, title: str = None, bpm: int = None, genre: List[str] = None, instrument: str = None, loop: bool = None):
     return crud.search_audio(db, title, bpm, genre, instrument, loop)
