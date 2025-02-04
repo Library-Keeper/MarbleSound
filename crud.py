@@ -45,7 +45,7 @@ def get_user(db: Session, search_by: SearchBy = SearchBy.id, username: str = Non
         raise HTTPException(404)
 
 def get_users(db: Session, username: str):
-    return db.query(models.User).filter(models.User.username.regexp_match(f"(?i).*{username}.*", flags='i')).limit(30).all()
+    return db.query(models.User).filter(models.User.username.ilike(f"%{username}%"))
 
 def check_user_session(db: Session, id:int, session: str):
     user_data = get_user_hash(db, session, id)
