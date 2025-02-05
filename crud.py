@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_, and_, func
 from datetime import datetime
 from hashing import Hasher
@@ -7,7 +7,7 @@ import models
 from enum import Enum
 from fastapi import UploadFile, HTTPException
 from fastapi.responses import FileResponse
-from typing import List
+from typing import List, Union
 class SearchBy(str, Enum):
     id = "ID"
     username = "Username"
@@ -19,8 +19,7 @@ def create_user(username: str, password: str, db: Session):
     )
 
     db.add(db_user)
-    db.commit()
-    db_user = db.query(models.User).filter(models.User.username == username).first()
+    db.flush()
     session = str(uuid4())
     db_user_password = models.UserHashedData(
         user_id=db_user.id,
@@ -116,8 +115,6 @@ def get_file(filepath: str) -> FileResponse:
 def update_user_avatar(db: Session, id: int, avatar: UploadFile):
     user = get_user(db, id=id)
     file = save_file("./uploads/avatar", avatar)
-    #if isinstance(file, dict):
-    #    return 
     user.avatar = file
     db.commit()
     db.refresh(user)
@@ -126,37 +123,48 @@ def update_user_avatar(db: Session, id: int, avatar: UploadFile):
 def get_user_avatar(db: Session, id: int) -> FileResponse:
     return get_file(get_user(db, id=id).avatar)
 
+def get_genre(db: Session, id: int = None, name: str = None):
+    db_genre = db.query(models.Genre).all()
+    if id is not None:
+        db_genre = db.query(models.Genre).filter(models.Genre.id == id).first()
+    if name is not None:
+        db_genre = db.query(models.Genre).filter(models.Genre.name.ilike(f"%{name}%")).first()
+    return db_genre
+
 def create_audio(db: Session, user_id: int, file: UploadFile, cover: UploadFile, title: str, 
-                 is_loop: bool, key: str, bpm: int, genre: List[str], instrument: str):
+                 is_loop: bool, key: str, bpm: int, genres: List[str], instrument: str):
     db_user = get_user(db, SearchBy.id, id=user_id)
     audio_file = save_file("./uploads/audio/file", file)
     audio_cover = save_file("./uploads/audio/cover", cover) if cover is not None else None  
 
-    genre_str = ""
-    if genre:
-        genre_clean = [g.strip().lower() for g in genre]
-        genre_str = ",".join(genre_clean)
-
-
     db_audio = models.Audio(
         title=title, file=audio_file, cover=audio_cover, key=key,
-        instrument=instrument, bpm=bpm, genre=genre_str,
+        instrument=instrument, bpm=bpm,
         is_loop=is_loop, author_id=db_user.id
     )
     db.add(db_audio)
+    db.flush()
+    genres = genres[0].split(",")
+    if genres:
+        for genre_name in genres:
+            db_genre = get_genre(db, name=genre_name)
+            if not db_genre:
+                raise HTTPException(404, detail=genres) 
+            db.add(models.AudioGenre(audio_id=db_audio.id, genre_id=db_genre.id))
+
     db.commit()
     return {"id": db_audio.id}
 
 def get_audio(db: Session, id: int = None):
-    audio = db.query(models.Audio).filter(models.Audio.id == id).first()
+    audio = db.query(models.Audio).options(joinedload(models.Audio.genres)).filter(models.Audio.id == id).first()
     if not audio:
-        raise HTTPException(404)
+        raise HTTPException(status_code=404, detail="Audio not found")
     return audio
 
 def search_audio(db: Session, title: str = None, bpm: int = None, 
                  genre: List[str] = None, instrument: str = None, loop: bool = None):
     if all(param is None for param in [title, bpm, genre, instrument, loop]):
-        raise HTTPException(status_code=400)
+        raise HTTPException(400)
 
     filters = []
     if title is not None:

@@ -36,7 +36,8 @@ class Audio(Base):
     playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=True)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
-    genre = relationship("AudioGenre", backref="audios")
+    genres = relationship("Genre", secondary="audiosgenres", back_populates="audios")
+
     favorite = relationship("Favorite", backref="audios")
 
 class Genre(Base):
@@ -45,7 +46,7 @@ class Genre(Base):
     id = Column(Integer, autoincrement=True, primary_key=True, index=True)
     name = Column(String(128), nullable=False)
 
-    audio = relationship("AudioGenre", backref="genres")
+    audios = relationship("Audio", secondary="audiosgenres", back_populates="genres")
 
 class AudioGenre(Base):
     __tablename__ = "audiosgenres"
