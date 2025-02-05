@@ -32,10 +32,27 @@ class Audio(Base):
     key = Column(String(255), default="No key")
     instrument = Column(String(255), nullable=False)
     bpm = Column(Integer)
-    genre = Column(String(255))
     is_loop = Column(Boolean, nullable=False, default=False)
     playlist_id = Column(Integer, ForeignKey("playlists.id"), nullable=True)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    genre = relationship("AudioGenre", backref="audios")
+    favorite = relationship("Favorite", backref="audios")
+
+class Genre(Base):
+    __tablename__ = "genres"
+
+    id = Column(Integer, autoincrement=True, primary_key=True, index=True)
+    name = Column(String(128), nullable=False)
+
+    audio = relationship("AudioGenre", backref="genres")
+
+class AudioGenre(Base):
+    __tablename__ = "audiosgenres"
+
+    id = Column(Integer, autoincrement=True, primary_key=True)
+    audio_id = Column(Integer, ForeignKey("audios.id"))
+    genre_id = Column(Integer, ForeignKey("genres.id"))
 
 class Playlist(Base):
     __tablename__ = "playlists"
@@ -45,3 +62,13 @@ class Playlist(Base):
     cover = Column(String(2048))
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     audio = relationship("Audio", backref="playlists")
+    favorite = relationship("Favorite", backref="playlists")
+
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    id = Column(Integer, autoincrement=True, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    audio_id = Column(Integer, ForeignKey("audios.id"))
+    playlist_id = Column(Integer, ForeignKey("playlists.id"))
+
