@@ -18,67 +18,148 @@ def get_db():
 db = Annotated[Session, Depends(get_db)]
 
 @app.post("/user/create/", status_code=201)
-def create_user(db: db, username: str, password: str):
-    user = crud.get_user(db=db, search_by=crud.SearchBy.username, username=username)
+def create_user(
+    db: db, 
+    username: str, 
+    password: str
+    ):
+    user = crud.get_user(db, crud.SearchBy.username, username=username)
+    
     if user:
-        raise HTTPException(400, detail="User already registered")
+        raise HTTPException(404)
     return crud.create_user(username=username, password=password, db=db)
 
 @app.post("/user/logout/", status_code=200)
-def user_logout(db: db, id: int, session: str):
+def user_logout(
+    db: db, 
+    id: int, 
+    session: str
+    ):
     if not crud.check_user_session(db, id, session):
         raise HTTPException(403)
     return crud.user_logout(db=db, id=id, session=session)
 
 @app.post("/user/login/", status_code=201)
-def user_login(db: db, username: str, password: str):
+def user_login(
+    db: db, 
+    username: str, 
+    password: str
+    ):
     return crud.user_login(db=db, username=username, password=password)
 
 @app.get("/user/", status_code=200)
-def get_user(db: db, search_by: crud.SearchBy, username: str = None, id: int = None):
-    """
-    Get one user by id or username
-    """
+def get_user(
+    db: db, 
+    search_by: crud.SearchBy, 
+    username: str = None, 
+    id: int = None
+    ):
     return crud.get_user(db=db, search_by=search_by, username=username, id=id)
 
 @app.get("/users/", status_code=200)
-def get_users(db: db, username: str = None):
-    """
-    Get multiple users with similar username
-    """
+def get_users(
+    db: db, 
+    username: str = None
+    ):
     return crud.get_users(db=db, username=username)
 
 @app.put("/user/update/", status_code=202)
-def update_user_data(db: db, id: int, session: str, username: str = None, description: str = None):
+def update_user_data(
+    db: db, 
+    id: int, 
+    session: str, 
+    username: str = None, 
+    description: str = None
+    ):
     if not crud.check_user_session(db, id, session):
         raise HTTPException(403)
     return crud.update_user_data(db, id, username, description)
 
 @app.put("/user/update/avatar/", status_code=202)
-def update_user_avatar(db: db, id: int, session: str, avatar: UploadFile):
+def update_user_avatar(
+    db: db, 
+    id: int, 
+    session: str, 
+    avatar: UploadFile
+    ):
     if not crud.check_user_session(db, id, session):
         raise HTTPException(403)
     return crud.update_user_avatar(db, id, avatar)
 
 @app.get("/user/avatar/", status_code=200)
-def get_user_avatar(db: db, id: int):
+def get_user_avatar(
+    db: db, 
+    id: int
+    ):
     return crud.get_user_avatar(db, id)
 
 @app.post("/audio/create/", status_code=201)
-def create_audio(db: db, id: int, session: str, file: UploadFile, title: str, instrument: str, 
-                 is_loop: bool, key: str= None, bpm: int = None, genre: List[str] = None, cover: UploadFile = None):
+def create_audio(
+    db: db, 
+    id: int, 
+    session: str, 
+    file: UploadFile, 
+    title: str, 
+    instrument: str, 
+    is_loop: bool, 
+    key: str= None, 
+    bpm: int = None, 
+    genre: List[str] = None, 
+    cover: UploadFile = None
+    ):
     if not crud.check_user_session(db, id, session):
         raise HTTPException(403)
     return crud.create_audio(db, id, file, cover, title, is_loop, key, bpm, genre, instrument)
 
-@app.get("/audio/", status_code=200)
-def get_audio(db: db, id: int = None):
-    return crud.get_audio(db, id)
+@app.get("/audio/{audio_id}", status_code=200)
+def get_audio(
+    db: db, 
+    audio_id: int = None
+    ):
+    return crud.get_audio(db, audio_id)
 
 @app.post("/audios/", status_code=200)
-def search_audio(db: db, title: str = None, bpm: int = None, genre: List[str] = None, instrument: str = None, loop: bool = None):
+def search_audio(
+    db: db, 
+    title: str = None, 
+    bpm: int = None, 
+    genre: List[str] = None, 
+    instrument: str = None, 
+    loop: bool = None
+    ):
     return crud.search_audio(db, title, bpm, genre, instrument, loop)
 
 @app.get("/genres/", status_code=200)
 def get_genres(db: db):
     return crud.get_genre(db)
+
+@app.post("/playlist/create/", status_code=201)
+def create_playlist(
+    db: db, 
+    id: int, 
+    session: str, 
+    name: str,
+    cover: UploadFile = File(None)
+    ):
+    if not crud.check_user_session(db, id, session):
+        raise HTTPException(403)
+    return crud.create_playlist(db, id, name, cover)
+
+@app.post("/playlist/{playlist_id}/add/", status_code=200)
+def add_to_playlist(
+    db: db,
+    playlist_id: int,
+    audio_id: int,
+    id: int,
+    session: str
+    ):
+    if not crud.check_user_session(db, id, session):
+        raise HTTPException(403)
+    return crud.add_audio_to_playlist(db, playlist_id, audio_id, id)
+
+@app.get("/playlist/{playlist_id}/", status_code=200)
+def get_playlist(
+    db: db, 
+    playlist_id: int
+    ):
+    return crud.get_playlist(db, playlist_id)

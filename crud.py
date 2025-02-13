@@ -8,9 +8,19 @@ from enum import Enum
 from fastapi import UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from typing import List, Union
+from pathlib import Path
 class SearchBy(str, Enum):
     id = "ID"
     username = "Username"
+
+EXTENSION_GROUPS = {
+    "audio": {
+        "file": {".wav", ".mp3", ".aiff"},
+        "cover": {".png", ".jpg", ".jpeg", ".webp"}
+    },
+    "avatar": {".png", ".jpg", ".jpeg", ".webp"},
+    "playlist": {".png", ".jpg", ".jpeg", ".webp"}
+}
 
 def create_user(username: str, password: str, db: Session):
     db_user = models.User(
@@ -86,28 +96,41 @@ def update_user_data(db: Session, id: int, username: str = None, description: st
     db.refresh(user)
     return get_user(db, SearchBy.id, id=id)
 
-def save_file(path: str, file: UploadFile):
-    path = path.strip("./").split("/")
-    print(path)
-    filepath = f"./uploads/temp/{uuid4()}.tmp"
-    match path[1]:
-        case "audio":
-            match path[2]:
-                case "file":
-                    filepath = f"./uploads/audio/file/{uuid4()}+{file.filename}"
-                case "cover":
-                    filepath = f"./uploads/audio/cover/{uuid4()}+{file.filename}"
-        case "avatar":
-            filepath = f"./uploads/avatar/{uuid4()}+{file.filename}"
-        case "playlist":
-            filepath = f"./uploads/playlist/cover/{uuid4()}+{file.filename}"
-    
-    if path[1] != "audio" and not filepath.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.wav', '.mp3', '.aiff')):
-        raise HTTPException(404)
+def save_file(path: str, file: UploadFile) -> str:
+    parts = path.strip("./").split("/")
+    if len(parts) < 3:
+        raise HTTPException(400, "Invalid path format")
 
-    with open(filepath, "wb") as f:
-        f.write(file.file.read())
-    return filepath
+    category, subcategory = parts[1], parts[2]
+    
+    try:
+        if category == "audio":
+            base_dir = Path(f"./uploads/audio/{subcategory}")
+            allowed_extensions = EXTENSION_GROUPS["audio"][subcategory]
+        else:
+            base_dir = Path(f"./uploads/{category}")
+            if category == "playlist":
+                base_dir /= "cover"
+            allowed_extensions = EXTENSION_GROUPS[category]
+    except KeyError:
+        raise HTTPException(400, "Invalid file category")
+
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(400, "Unsupported file type")
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"{uuid4().hex}{file_ext}"
+    filepath = base_dir / filename
+
+    try:
+        with filepath.open("wb") as buffer:
+            buffer.write(file.file.read())
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save file: {str(e)}")
+
+    return str(filepath.resolve())
 
 def get_file(filepath: str) -> FileResponse:
     return FileResponse(path = filepath, filename=filepath.split("/")[-1],media_type='multipart/form-data')
@@ -189,3 +212,49 @@ def search_audio(db: Session, title: str = None, bpm: int = None,
     query = db.query(models.Audio).filter(or_(*filters))
     results = query.all()
     return results
+
+
+def create_playlist(db: Session, user_id: int, name: str, cover: UploadFile = None):
+    db_user = get_user(db, SearchBy.id, id=user_id)
+    
+    playlist = models.Playlist(
+        name=name,
+        author_id=db_user.id,
+        cover=save_file("./uploads/playlist/cover", cover) if cover else None
+    )
+    
+    db.add(playlist)
+    db.commit()
+    return {"id": playlist.id}
+
+def add_audio_to_playlist(db: Session, playlist_id: int, audio_id: int, user_id: int):
+    playlist = db.query(models.Playlist).filter(
+        models.Playlist.id == playlist_id,
+        models.Playlist.author_id == user_id
+    ).first()
+    
+    if not playlist:
+        raise HTTPException(404, "Playlist not found")
+    
+    audio = get_audio(db, audio_id)
+    if not audio:
+        raise HTTPException(404, "Audio not found")
+    
+    max_order = db.query(func.max(models.PlaylistAudio.order)).filter(
+        models.PlaylistAudio.playlist_id == playlist_id
+    ).scalar() or 0
+    
+    playlist_audio = models.PlaylistAudio(
+        playlist_id=playlist_id,
+        audio_id=audio_id,
+        order=max_order + 1
+    )
+    
+    db.add(playlist_audio)
+    db.commit()
+    return {"status": "added"}
+
+def get_playlist(db: Session, playlist_id: int):
+    return db.query(models.Playlist).options(
+        joinedload(models.Playlist.audios)
+    ).filter(models.Playlist.id == playlist_id).first()
