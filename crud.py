@@ -9,6 +9,8 @@ from fastapi import UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from typing import List, Union
 from pathlib import Path
+
+
 class SearchBy(str, Enum):
     id = "ID"
     username = "Username"
@@ -21,6 +23,53 @@ EXTENSION_GROUPS = {
     "avatar": {".png", ".jpg", ".jpeg", ".webp"},
     "playlist": {".png", ".jpg", ".jpeg", ".webp"}
 }
+
+# =====================
+# Function
+# =====================
+
+def save_file(path: str, file: UploadFile) -> str:
+    parts = path.strip("./").split("/")
+    if len(parts) < 3:
+        raise HTTPException(400, "Invalid path format")
+
+    category, subcategory = parts[1], parts[2]
+    
+    try:
+        if category == "audio":
+            base_dir = Path(f"./uploads/audio/{subcategory}")
+            allowed_extensions = EXTENSION_GROUPS["audio"][subcategory]
+        else:
+            base_dir = Path(f"./uploads/{category}")
+            if category == "playlist":
+                base_dir /= "cover"
+            allowed_extensions = EXTENSION_GROUPS[category]
+    except KeyError:
+        raise HTTPException(400, "Invalid file category")
+
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in allowed_extensions:
+        raise HTTPException(400, "Unsupported file type")
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+    
+    filename = f"{uuid4().hex}{file_ext}"
+    filepath = base_dir / filename
+
+    try:
+        with filepath.open("wb") as buffer:
+            buffer.write(file.file.read())
+    except Exception as e:
+        raise HTTPException(500, f"Failed to save file: {str(e)}")
+
+    return str(filepath.resolve())
+
+def get_file(filepath: str) -> FileResponse:
+    return FileResponse(path = filepath, filename=filepath.split("/")[-1],media_type='multipart/form-data')
+
+# =====================
+# User control
+# =====================
 
 def create_user(username: str, password: str, db: Session):
     db_user = models.User(
@@ -96,45 +145,6 @@ def update_user_data(db: Session, id: int, username: str = None, description: st
     db.refresh(user)
     return get_user(db, SearchBy.id, id=id)
 
-def save_file(path: str, file: UploadFile) -> str:
-    parts = path.strip("./").split("/")
-    if len(parts) < 3:
-        raise HTTPException(400, "Invalid path format")
-
-    category, subcategory = parts[1], parts[2]
-    
-    try:
-        if category == "audio":
-            base_dir = Path(f"./uploads/audio/{subcategory}")
-            allowed_extensions = EXTENSION_GROUPS["audio"][subcategory]
-        else:
-            base_dir = Path(f"./uploads/{category}")
-            if category == "playlist":
-                base_dir /= "cover"
-            allowed_extensions = EXTENSION_GROUPS[category]
-    except KeyError:
-        raise HTTPException(400, "Invalid file category")
-
-    file_ext = Path(file.filename).suffix.lower()
-    if file_ext not in allowed_extensions:
-        raise HTTPException(400, "Unsupported file type")
-
-    base_dir.mkdir(parents=True, exist_ok=True)
-    
-    filename = f"{uuid4().hex}{file_ext}"
-    filepath = base_dir / filename
-
-    try:
-        with filepath.open("wb") as buffer:
-            buffer.write(file.file.read())
-    except Exception as e:
-        raise HTTPException(500, f"Failed to save file: {str(e)}")
-
-    return str(filepath.resolve())
-
-def get_file(filepath: str) -> FileResponse:
-    return FileResponse(path = filepath, filename=filepath.split("/")[-1],media_type='multipart/form-data')
-
 def update_user_avatar(db: Session, id: int, avatar: UploadFile):
     user = get_user(db, id=id)
     file = save_file("./uploads/avatar", avatar)
@@ -145,6 +155,20 @@ def update_user_avatar(db: Session, id: int, avatar: UploadFile):
 
 def get_user_avatar(db: Session, id: int) -> FileResponse:
     return get_file(get_user(db, id=id).avatar)
+
+def delete_user(db: Session, id: int, session: str):
+    if not check_user_session(db, id, session):
+        raise HTTPException(401)
+    db_user = get_user(db, SearchBy.id, id=id)
+    db_user_data = get_user_hash(db, session=session, id=id)
+    db.delete(db_user_data)
+    db.delete(db_user)
+    db.commit()
+    return 
+
+# =====================
+# Audio control
+# =====================
 
 def get_genre(db: Session, id: int = None, name: str = None):
     db_genre = db.query(models.Genre).all()
@@ -213,6 +237,32 @@ def search_audio(db: Session, title: str = None, bpm: int = None,
     results = query.all()
     return results
 
+def delete_audio(db: Session, audio_id: int, user_id: int):
+    db_audio = db.query(models.Audio).filter(
+        models.Audio.id == audio_id,
+        models.Audio.author_id == user_id
+    ).first()
+    
+    if not db_audio:
+        raise HTTPException(404, "Audio not found or access denied")
+    
+    db.query(models.AudioGenre).filter(models.AudioGenre.audio_id == audio_id).delete()
+    db.query(models.PlaylistAudio).filter(models.PlaylistAudio.audio_id == audio_id).delete()
+    db.query(models.Favorite).filter(models.Favorite.audio_id == audio_id).delete()
+    
+    for file_path in [db_audio.file, db_audio.cover]:
+        if file_path:
+            path = Path(file_path)
+            if path.exists():
+                path.unlink()
+    
+    db.delete(db_audio)
+    db.commit()
+    return {"status": "Audio deleted"}
+
+# =====================
+# User control
+# =====================
 
 def create_playlist(db: Session, user_id: int, name: str, cover: UploadFile = None):
     db_user = get_user(db, SearchBy.id, id=user_id)
@@ -258,3 +308,26 @@ def get_playlist(db: Session, playlist_id: int):
     return db.query(models.Playlist).options(
         joinedload(models.Playlist.audios)
     ).filter(models.Playlist.id == playlist_id).first()
+
+def delete_playlist(db: Session, playlist_id: int, user_id: int):
+    db_playlist = db.query(models.Playlist).filter(
+        models.Playlist.id == playlist_id,
+        models.Playlist.author_id == user_id
+    ).first()
+    
+    if not db_playlist:
+        raise HTTPException(404, "Playlist not found or access denied")
+    
+    db.query(models.PlaylistAudio).filter(models.PlaylistAudio.playlist_id == playlist_id).delete()
+    db.query(models.Favorite).filter(models.Favorite.playlist_id == playlist_id).delete()
+    
+    if db_playlist.cover:
+        path = Path(db_playlist.cover)
+        if path.exists():
+            path.unlink()
+    
+    db.delete(db_playlist)
+    db.commit()
+    return {"status": "Playlist deleted"}
+
+
