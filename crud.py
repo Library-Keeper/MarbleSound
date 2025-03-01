@@ -10,7 +10,6 @@ from fastapi.responses import FileResponse
 from typing import List, Union
 from pathlib import Path
 
-
 class SearchBy(str, Enum):
     id = "ID"
     username = "Username"
@@ -37,10 +36,10 @@ def save_file(path: str, file: UploadFile) -> str:
     
     try:
         if category == "audio":
-            base_dir = Path(f"./uploads/audio/{subcategory}")
+            base_dir = Path(f"uploads/audio/{subcategory}")
             allowed_extensions = EXTENSION_GROUPS["audio"][subcategory]
         else:
-            base_dir = Path(f"./uploads/{category}")
+            base_dir = Path(f"uploads/{category}")
             if category == "playlist":
                 base_dir /= "cover"
             allowed_extensions = EXTENSION_GROUPS[category]
@@ -62,11 +61,17 @@ def save_file(path: str, file: UploadFile) -> str:
     except Exception as e:
         raise HTTPException(500, f"Failed to save file: {str(e)}")
 
-    return str(filepath.resolve())
+    return str(filepath).replace("\\", "/")
 
 def get_file(filepath: str) -> FileResponse:
-    return FileResponse(path = filepath, filename=filepath.split("/")[-1],media_type='multipart/form-data')
-
+    absolute_path = Path.cwd() / filepath
+    if not absolute_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(
+        path=absolute_path,
+        filename=absolute_path.name,
+        media_type='multipart/form-data'
+    )
 # =====================
 # User control
 # =====================
@@ -124,7 +129,7 @@ def user_login(db: Session, username:str, password: str):
     user_data.hashed_session = str(Hasher.get_hash(session))
     db.commit()
     db.refresh(user_data)
-    return {"session": session}
+    return {"id": user.id, "session": session}
 
 def get_user_hash(db: Session, session: str, id: int):
     user_data = db.query(models.UserHashedData).filter(models.UserHashedData.user_id == id).first()
@@ -172,6 +177,41 @@ def get_user_favorites(db: Session, user_id: int):
     ).options(
         joinedload(models.Favorite.audios),
         joinedload(models.Favorite.playlists)
+    ).all()
+
+def remove_from_favorites(
+    db: Session,
+    user_id: int,
+    audio_id: int = None,
+    playlist_id: int = None
+):
+    filters = [models.Favorite.user_id == user_id]
+    if audio_id:
+        filters.append(models.Favorite.audio_id == audio_id)
+    if playlist_id:
+        filters.append(models.Favorite.playlist_id == playlist_id)
+    
+    favorite = db.query(models.Favorite).filter(and_(*filters)).first()
+    if not favorite:
+        raise HTTPException(404, "Favorite not found")
+    
+    db.delete(favorite)
+    db.commit()
+    return {"status": "removed from favorites"}
+
+def get_user_audios(db: Session, user_id: int):
+    return db.query(models.Audio).filter(
+        models.Audio.author_id == user_id
+    ).options(
+        joinedload(models.Audio.genres),
+        joinedload(models.Audio.instrument)
+    ).all()
+
+def get_user_playlists(db: Session, user_id: int):
+    return db.query(models.Playlist).filter(
+        models.Playlist.author_id == user_id
+    ).options(
+        joinedload(models.Playlist.audios)
     ).all()
 
 # =====================
@@ -240,6 +280,65 @@ def create_audio(db: Session, user_id: int, file: UploadFile, cover: UploadFile,
 
     db.commit()
     return {"id": db_audio.id}
+
+def update_audio(
+    db: Session,
+    audio_id: int,
+    user_id: int,
+    title: str = None,
+    key: str = None,
+    bpm: int = None,
+    genres: List[str] = None,
+    instrument: str = None,
+    is_loop: bool = None
+):
+    db_audio = db.query(models.Audio).filter(
+        models.Audio.id == audio_id,
+        models.Audio.author_id == user_id
+    ).first()
+    
+    if not db_audio:
+        raise HTTPException(404, "Audio not found or access denied")
+    
+    if title: db_audio.title = title
+    if bpm: db_audio.bpm = bpm
+    if is_loop is not None: db_audio.is_loop = is_loop
+    
+    if key:
+        db_key = db.query(models.Key).filter(
+            func.lower(models.Key.name) == func.lower(key.strip())
+        ).first()
+        if not db_key:
+            db_key = models.Key(name=key.strip().upper())
+            db.add(db_key)
+            db.flush()
+        db_audio.key_id = db_key.id
+    
+    if instrument:
+        db_instrument = db.query(models.Instrument).filter(
+            func.lower(models.Instrument.name) == func.lower(instrument)
+        ).first()
+        if not db_instrument:
+            raise HTTPException(404, "Instrument not found")
+        db_audio.instrument_id = db_instrument.id
+    
+    if genres is not None:
+        db.query(models.AudioGenre).filter(
+            models.AudioGenre.audio_id == audio_id
+        ).delete()
+        for genre_name in genres:
+            db_genre = db.query(models.Genre).filter(
+                func.lower(models.Genre.name) == func.lower(genre_name.strip())
+            ).first()
+            if not db_genre:
+                raise HTTPException(404, f"Genre '{genre_name}' not found")
+            db.add(models.AudioGenre(
+                audio_id=audio_id,
+                genre_id=db_genre.id
+            ))
+    
+    db.commit()
+    return db_audio
 
 def get_audio(db: Session, id: int = None):
     audio = db.query(models.Audio).options(joinedload(models.Audio.genres),joinedload(models.Audio.instrument)).filter(models.Audio.id == id).first()
@@ -321,7 +420,6 @@ def add_to_favorites(db: Session, user_id: int, audio_id: int = None, playlist_i
     return {"status": "added to favorites"}
 
 def get_popular_audios(db: Session, limit: int):
-    # Выполняем запрос с явным указанием полей
     results = db.query(
         models.Audio,
         func.count(models.Favorite.id).label('favorites_count')
@@ -332,10 +430,9 @@ def get_popular_audios(db: Session, limit: int):
         func.count(models.Favorite.id).desc()
     ).limit(limit).all()
     
-    # Преобразуем результаты в словари
     return [
         {
-            "audio": audio.to_dict(),  # Нужно добавить метод to_dict() в модель Audio
+            "audio": audio.to_dict(),
             "favorites_count": favorites_count
         }
         for audio, favorites_count in results
@@ -418,3 +515,55 @@ def get_popular_playlists(db: Session, limit: int):
         favorites_count.desc()
     ).limit(limit).all()
 
+def update_playlist(
+    db: Session,
+    playlist_id: int,
+    user_id: int,
+    name: str = None,
+    cover: UploadFile = None
+):
+    playlist = db.query(models.Playlist).filter(
+        models.Playlist.id == playlist_id,
+        models.Playlist.author_id == user_id
+    ).first()
+    
+    if not playlist:
+        raise HTTPException(404, "Playlist not found")
+    
+    if name: playlist.name = name
+    if cover: 
+        playlist.cover = save_file("./uploads/playlist/cover", cover)
+    
+    db.commit()
+    return playlist
+
+def remove_audio_from_playlist(
+    db: Session,
+    playlist_id: int,
+    audio_id: int,
+    user_id: int
+):
+    # Проверка прав доступа
+    playlist = db.query(models.Playlist).filter(
+        models.Playlist.id == playlist_id,
+        models.Playlist.author_id == user_id
+    ).first()
+    if not playlist:
+        raise HTTPException(404, "Playlist not found")
+    
+    # Удаление связи
+    db.query(models.PlaylistAudio).filter(
+        models.PlaylistAudio.playlist_id == playlist_id,
+        models.PlaylistAudio.audio_id == audio_id
+    ).delete()
+    
+    # Обновление порядка треков
+    tracks = db.query(models.PlaylistAudio).filter(
+        models.PlaylistAudio.playlist_id == playlist_id
+    ).order_by(models.PlaylistAudio.order).all()
+    
+    for idx, track in enumerate(tracks):
+        track.order = idx + 1
+    
+    db.commit()
+    return {"status": "audio removed"}
