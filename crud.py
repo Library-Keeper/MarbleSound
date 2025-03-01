@@ -166,6 +166,14 @@ def delete_user(db: Session, id: int, session: str):
     db.commit()
     return 
 
+def get_user_favorites(db: Session, user_id: int):
+    return db.query(models.Favorite).filter(
+        models.Favorite.user_id == user_id
+    ).options(
+        joinedload(models.Favorite.audios),
+        joinedload(models.Favorite.playlists)
+    ).all()
+
 # =====================
 # Audio control
 # =====================
@@ -178,17 +186,48 @@ def get_genre(db: Session, id: int = None, name: str = None):
         db_genre = db.query(models.Genre).filter(models.Genre.name.ilike(f"%{name}%")).first()
     return db_genre
 
+def get_all_keys(db: Session):
+    return db.query(models.Key).all()
+
+def get_all_instruments(db: Session):
+    return db.query(models.Instrument).all()
+
 def create_audio(db: Session, user_id: int, file: UploadFile, cover: UploadFile, title: str, 
                  is_loop: bool, key: str, bpm: int, genres: List[str], instrument: str):
     db_user = get_user(db, SearchBy.id, id=user_id)
     audio_file = save_file("./uploads/audio/file", file)
     audio_cover = save_file("./uploads/audio/cover", cover) if cover is not None else None  
 
+    db_instrument = db.query(models.Instrument).filter(
+        func.lower(models.Instrument.name) == func.lower(instrument)
+    ).first()
+    if not db_instrument:
+        raise HTTPException(404)
+
+    if key:
+        db_key = db.query(models.Key).filter(
+            func.lower(models.Key.name) == func.lower(key)
+        ).first()
+        
+        if not db_key:
+            db_key = models.Key(name=key.strip().upper())
+            db.add(db_key)
+            db.flush()
+
     db_audio = models.Audio(
-        title=title, file=audio_file, cover=audio_cover, key=key,
-        instrument=instrument, bpm=bpm,
-        is_loop=is_loop, author_id=db_user.id
+        title=title,
+        file=audio_file,
+        cover=audio_cover,
+        key_id=db_key.id if db_key else None,
+        instrument_id=db_instrument.id, 
+        bpm=bpm,
+        is_loop=is_loop,
+        author_id=db_user.id
     )
+
+
+
+
     db.add(db_audio)
     db.flush()
     genres = genres[0].split(",")
@@ -203,13 +242,14 @@ def create_audio(db: Session, user_id: int, file: UploadFile, cover: UploadFile,
     return {"id": db_audio.id}
 
 def get_audio(db: Session, id: int = None):
-    audio = db.query(models.Audio).options(joinedload(models.Audio.genres)).filter(models.Audio.id == id).first()
+    audio = db.query(models.Audio).options(joinedload(models.Audio.genres),joinedload(models.Audio.instrument)).filter(models.Audio.id == id).first()
     if not audio:
         raise HTTPException(status_code=404, detail="Audio not found")
     return audio
 
 def search_audio(db: Session, title: str = None, bpm: int = None, 
-                 genre: List[str] = None, instrument: str = None, loop: bool = None):
+                 genre: List[str] = None, instrument: str = None, 
+                 loop: bool = None, key: str = None):
     if all(param is None for param in [title, bpm, genre, instrument, loop]):
         raise HTTPException(400)
 
@@ -218,7 +258,8 @@ def search_audio(db: Session, title: str = None, bpm: int = None,
         filters.append(models.Audio.title.ilike(f"%{title}%"))
     if bpm is not None:
         filters.append(models.Audio.bpm == bpm)
-
+    if instrument is not None:
+        filters.append(func.lower(models.Instrument.name) == func.lower(instrument))
     if genre:
         genre_conditions = []
         for g in genre:
@@ -227,7 +268,12 @@ def search_audio(db: Session, title: str = None, bpm: int = None,
                 func.find_in_set(g_clean, models.Audio.genre) > 0
             )
         filters.append(or_(*genre_conditions))
-
+    if key:
+        db_key = db.query(models.Key).filter(
+            func.lower(models.Key.name) == func.lower(key)
+        ).first()
+        if db_key:
+            filters.append(models.Audio.key_id == db_key.id)
     if instrument is not None:
         filters.append(models.Audio.instrument == instrument)
     if loop is not None:
@@ -260,8 +306,43 @@ def delete_audio(db: Session, audio_id: int, user_id: int):
     db.commit()
     return {"status": "Audio deleted"}
 
+def add_to_favorites(db: Session, user_id: int, audio_id: int = None, playlist_id: int = None):
+    if not any([audio_id, playlist_id]):
+        raise HTTPException(400, "Must provide either audio or playlist ID")
+    
+    favorite = models.Favorite(
+        user_id=user_id,
+        audio_id=audio_id,
+        playlist_id=playlist_id
+    )
+    
+    db.add(favorite)
+    db.commit()
+    return {"status": "added to favorites"}
+
+def get_popular_audios(db: Session, limit: int):
+    # Выполняем запрос с явным указанием полей
+    results = db.query(
+        models.Audio,
+        func.count(models.Favorite.id).label('favorites_count')
+    ).outerjoin(
+        models.Favorite,
+        models.Audio.id == models.Favorite.audio_id
+    ).group_by(models.Audio.id).order_by(
+        func.count(models.Favorite.id).desc()
+    ).limit(limit).all()
+    
+    # Преобразуем результаты в словари
+    return [
+        {
+            "audio": audio.to_dict(),  # Нужно добавить метод to_dict() в модель Audio
+            "favorites_count": favorites_count
+        }
+        for audio, favorites_count in results
+    ]
+
 # =====================
-# User control
+# Playlist control
 # =====================
 
 def create_playlist(db: Session, user_id: int, name: str, cover: UploadFile = None):
@@ -330,4 +411,10 @@ def delete_playlist(db: Session, playlist_id: int, user_id: int):
     db.commit()
     return {"status": "Playlist deleted"}
 
+def get_popular_playlists(db: Session, limit: int):
+    return db.query(models.Playlist).annotate(
+        favorites_count=func.count(models.Favorite.id)
+    ).outerjoin(models.Favorite).group_by(models.Playlist.id).order_by(
+        favorites_count.desc()
+    ).limit(limit).all()
 

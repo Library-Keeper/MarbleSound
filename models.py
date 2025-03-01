@@ -29,16 +29,48 @@ class Audio(Base):
     title = Column(Text, nullable=False)
     cover = Column(Text, nullable=True)
     file = Column(Text, nullable=False)
-    key = Column(String(255), default="No key")
-    instrument = Column(String(255), nullable=False)
+    key_id = Column(Integer, ForeignKey("keys.id"), nullable=True)
+    instrument_id = Column(Integer, ForeignKey("instruments.id"), nullable=False)
     bpm = Column(Integer)
     is_loop = Column(Boolean, nullable=False, default=False)
-    playlists = relationship("Playlist", secondary="playlistaudio", back_populates="audios")
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
+    instrument = relationship("Instrument", back_populates="audios")
     genres = relationship("Genre", secondary="audiosgenres", back_populates="audios")
-
+    playlists = relationship("Playlist", secondary="playlistaudio", back_populates="audios")
     favorite = relationship("Favorite", backref="audios")
+    key = relationship("Key", back_populates="audios")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "cover": self.cover,
+            "file": self.file,
+            "key": self.key.name if self.key else None,
+            "instrument": self.instrument.name,
+            "bpm": self.bpm,
+            "is_loop": self.is_loop,
+            "author_id": self.author_id
+        }
+
+
+class Instrument(Base):
+    __tablename__ = "instruments"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True, nullable=False)
+
+    audios = relationship("Audio", back_populates="instrument")
+
+class Key(Base):
+    __tablename__ = "keys"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True, nullable=False)
+
+    audios = relationship("Audio", back_populates="key")
+
 
 class Genre(Base):
     __tablename__ = "genres"
