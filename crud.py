@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_, and_, func
+from sqlalchemy import or_, and_, func, exists
 from datetime import datetime
 from hashing import Hasher
 from uuid import uuid4
@@ -9,6 +9,8 @@ from fastapi import UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from typing import List, Union
 from pathlib import Path
+from pydub import AudioSegment
+from pydub.exceptions import CouldntDecodeError
 
 class SearchBy(str, Enum):
     id = "ID"
@@ -48,7 +50,7 @@ def save_file(path: str, file: UploadFile) -> str:
 
     file_ext = Path(file.filename).suffix.lower()
     if file_ext not in allowed_extensions:
-        raise HTTPException(400, "Unsupported file type")
+        raise HTTPException(400, f"Unsupported file type {file_ext} - {file.filename}")
 
     base_dir.mkdir(parents=True, exist_ok=True)
     
@@ -254,6 +256,16 @@ def create_audio(db: Session, user_id: int, file: UploadFile, cover: UploadFile,
             db.add(db_key)
             db.flush()
 
+    try:
+        audio = AudioSegment.from_file(audio_file)
+        duration = len(audio) / 1000 
+        
+    except CouldntDecodeError:
+        duration = None
+    except Exception as e:
+        duration = None
+
+
     db_audio = models.Audio(
         title=title,
         file=audio_file,
@@ -262,7 +274,8 @@ def create_audio(db: Session, user_id: int, file: UploadFile, cover: UploadFile,
         instrument_id=db_instrument.id, 
         bpm=bpm,
         is_loop=is_loop,
-        author_id=db_user.id
+        author_id=db_user.id,
+        duration=duration
     )
 
 
@@ -270,7 +283,6 @@ def create_audio(db: Session, user_id: int, file: UploadFile, cover: UploadFile,
 
     db.add(db_audio)
     db.flush()
-    genres = genres[0].split(",")
     if genres:
         for genre_name in genres:
             db_genre = get_genre(db, name=genre_name)
@@ -346,40 +358,117 @@ def get_audio(db: Session, id: int = None):
         raise HTTPException(status_code=404, detail="Audio not found")
     return audio
 
-def search_audio(db: Session, title: str = None, bpm: int = None, 
-                 genre: List[str] = None, instrument: str = None, 
-                 loop: bool = None, key: str = None):
-    if all(param is None for param in [title, bpm, genre, instrument, loop]):
-        raise HTTPException(400)
+def get_audio_file(db: Session, audio_id: int):
+    audio = db.query(models.Audio).filter(models.Audio.id == audio_id).first()
+    if not audio or not audio.file:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return get_file(audio.file)
 
+def get_audio_file_v2(db: Session, audio_id: int):
+    audio = db.query(models.Audio).filter(models.Audio.id == audio_id).first()
+    if not audio or not audio.file:
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    
+    file_path = Path(audio.file)
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found on server")
+    
+    return FileResponse(
+        path=file_path,
+        filename=file_path.name,
+        media_type='application/octet-stream',
+        headers={
+            'Content-Disposition': f'attachment; filename="{file_path.name}"',
+            'Access-Control-Expose-Headers': 'Content-Disposition'
+        }
+    )
+
+def get_audio_cover(db: Session, audio_id: int):
+    audio = db.query(models.Audio).filter(models.Audio.id == audio_id).first()
+    if not audio or not audio.cover:
+        raise HTTPException(status_code=404, detail="Cover not found")
+    return get_file(audio.cover)
+
+def search_audio(
+    db: Session,
+    title: str = None,
+    min_bpm: int = None,
+    max_bpm: int = None,
+    genres: str = None,
+    instruments: str = None,
+    keys: str = None,
+    loop: bool = None
+    ):
+    query = db.query(models.Audio).join(models.Audio.instrument)
     filters = []
-    if title is not None:
-        filters.append(models.Audio.title.ilike(f"%{title}%"))
-    if bpm is not None:
-        filters.append(models.Audio.bpm == bpm)
-    if instrument is not None:
-        filters.append(func.lower(models.Instrument.name) == func.lower(instrument))
-    if genre:
-        genre_conditions = []
-        for g in genre:
-            g_clean = g.strip().lower()
-            genre_conditions.append(
-                func.find_in_set(g_clean, models.Audio.genre) > 0
-            )
-        filters.append(or_(*genre_conditions))
-    if key:
-        db_key = db.query(models.Key).filter(
-            func.lower(models.Key.name) == func.lower(key)
-        ).first()
-        if db_key:
-            filters.append(models.Audio.key_id == db_key.id)
-    if instrument is not None:
-        filters.append(models.Audio.instrument == instrument)
-    if loop is not None:
-        filters.append(models.Audio.loop.is_(loop))
 
-    query = db.query(models.Audio).filter(or_(*filters))
-    results = query.all()
+    if title:
+        filters.append(models.Audio.title.ilike(f"%{title}%"))
+
+    bpm_filters = []
+    if min_bpm is not None:
+        bpm_filters.append(models.Audio.bpm >= min_bpm)
+    if max_bpm is not None:
+        bpm_filters.append(models.Audio.bpm <= max_bpm)
+    if bpm_filters:
+        filters.append(and_(*bpm_filters))
+
+    if instruments:
+        instrument_list = [i.strip().lower() for i in instruments.split(',')]
+        filters.append(func.lower(models.Instrument.name).in_(instrument_list))
+
+    if genres:
+        genre_list = [g.strip().lower() for g in genres.split(',')]
+        subquery = exists().where(
+            and_(
+                models.AudioGenre.audio_id == models.Audio.id,
+                models.Genre.id == models.AudioGenre.genre_id,
+                func.lower(models.Genre.name).in_(genre_list)
+            ))
+        filters.append(subquery)
+
+    if keys:
+        key_list = [k.strip().lower() for k in keys.split(',')]
+        query = query.join(models.Audio.key)
+        filters.append(func.lower(models.Key.name).in_(key_list))
+
+    if loop is not None:
+        filters.append(models.Audio.is_loop == loop)
+
+    if filters:
+        query = query.filter(and_(*filters))
+
+    query = query.options(
+        joinedload(models.Audio.genres),
+        joinedload(models.Audio.instrument),
+        joinedload(models.Audio.key)
+    )
+
+    audios = query.all()
+
+    if not audios:
+        return []
+
+    audio_ids = [audio.id for audio in audios]
+
+    favorites_counts = db.query(
+        models.Favorite.audio_id,
+        func.count(models.Favorite.id).label('favorites_count')
+    ).filter(
+        models.Favorite.audio_id.in_(audio_ids)
+    ).group_by(models.Favorite.audio_id).all()
+
+    counts_dict = {fc.audio_id: fc.favorites_count for fc in favorites_counts}
+
+    results = []
+    for audio in audios:
+        audio_dict = audio.to_dict()
+        favorites_count = counts_dict.get(audio.id, 0)
+        results.append({
+            "audio": audio_dict,
+            "favorites_count": favorites_count
+        })
+
     return results
 
 def delete_audio(db: Session, audio_id: int, user_id: int):
@@ -420,8 +509,8 @@ def add_to_favorites(db: Session, user_id: int, audio_id: int = None, playlist_i
     return {"status": "added to favorites"}
 
 def get_popular_audios(db: Session, limit: int):
-    results = db.query(
-        models.Audio,
+    audio_counts = db.query(
+        models.Audio.id,
         func.count(models.Favorite.id).label('favorites_count')
     ).outerjoin(
         models.Favorite,
@@ -429,14 +518,31 @@ def get_popular_audios(db: Session, limit: int):
     ).group_by(models.Audio.id).order_by(
         func.count(models.Favorite.id).desc()
     ).limit(limit).all()
-    
-    return [
-        {
+
+    if not audio_counts:
+        return []
+
+    audio_ids = [ac[0] for ac in audio_counts]
+    counts_dict = {ac[0]: ac[1] for ac in audio_counts}
+
+    audios = db.query(models.Audio).options(
+        joinedload(models.Audio.genres),
+        joinedload(models.Audio.instrument),
+        joinedload(models.Audio.key),
+        joinedload(models.Audio.author)
+    ).filter(models.Audio.id.in_(audio_ids)).all()
+
+    order_dict = {audio_id: idx for idx, audio_id in enumerate(audio_ids)}
+    audios_sorted = sorted(audios, key=lambda a: order_dict[a.id])
+
+    results = []
+    for audio in audios_sorted:
+        results.append({
             "audio": audio.to_dict(),
-            "favorites_count": favorites_count
-        }
-        for audio, favorites_count in results
-    ]
+            "favorites_count": counts_dict[audio.id]
+        })
+
+    return results
 
 # =====================
 # Playlist control

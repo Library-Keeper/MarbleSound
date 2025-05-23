@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, JSON 
+from sqlalchemy import Boolean, Column, Integer, String, DateTime, Text, ForeignKey, Float 
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -34,24 +34,34 @@ class Audio(Base):
     bpm = Column(Integer)
     is_loop = Column(Boolean, nullable=False, default=False)
     author_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    duration = Column(Float)
 
     instrument = relationship("Instrument", back_populates="audios")
     genres = relationship("Genre", secondary="audiosgenres", back_populates="audios")
     playlists = relationship("Playlist", secondary="playlistaudio", back_populates="audios")
     favorite = relationship("Favorite", backref="audios")
     key = relationship("Key", back_populates="audios")
+    author = relationship("User", back_populates="audios")
 
+    
     def to_dict(self):
         return {
             "id": self.id,
             "title": self.title,
             "cover": self.cover,
             "file": self.file,
+            "duration": self.duration,
             "key": self.key.name if self.key else None,
-            "instrument": self.instrument.name,
+            "instrument": self.instrument.name if self.instrument else None,
             "bpm": self.bpm,
             "is_loop": self.is_loop,
-            "author_id": self.author_id
+            "author_id": self.author_id,
+            "genres": [genre.name for genre in self.genres],
+            "author": {
+                "id": self.author.id,
+                "username": self.author.username,
+                "avatar": self.author.avatar
+            } if self.author else None
         }
 
 

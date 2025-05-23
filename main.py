@@ -160,9 +160,9 @@ def create_audio(
     title: str, 
     instrument: str, 
     is_loop: bool, 
+    genre: List[str], 
     key: str= None, 
     bpm: int = None, 
-    genre: List[str] = None, 
     cover: UploadFile = None
     ):
     if not crud.check_user_session(db, id, session):
@@ -176,16 +176,18 @@ def get_audio(
     ):
     return crud.get_audio(db, audio_id)
 
-@app.post("/audios/", status_code=200, tags=["Audio control"])
+@app.get("/audios/", status_code=200, tags=["Audio control"])
 def search_audio(
     db: db, 
     title: str = None, 
-    bpm: int = None, 
-    genre: List[str] = None, 
-    instrument: str = None, 
+    min_bpm: int = None,
+    max_bpm: int = None,
+    genres: str = None, 
+    instruments: str = None, 
+    keys: str = None,
     loop: bool = None
     ):
-    return crud.search_audio(db, title, bpm, genre, instrument, loop)
+    return crud.search_audio(db, title, min_bpm, max_bpm, genres, instruments, keys, loop)
 
 @app.get("/genres/", status_code=200, tags=["Audio control"])
 def get_genres(db: db):
@@ -198,6 +200,20 @@ def get_all_keys(db: db):
 @app.get("/instruments/", status_code=200, tags=["Audio control"])
 def get_all_instruments(db: db):
     return crud.get_all_instruments(db)
+
+@app.get("/audio/{audio_id}/file", tags=["Audio control"])
+def get_audio_file(
+    db: db,
+    audio_id: int
+    ):
+    return crud.get_audio_file(db, audio_id)
+
+@app.get("/audio/{audio_id}/cover", tags=["Audio control"])
+def get_audio_cover(
+    db: db,
+    audio_id: int
+    ):
+    return crud.get_audio_cover(db, audio_id)
 
 @app.delete("/audio/delete/{audio_id}", status_code=200, tags=["Audio control"])
 def delete_audio(
